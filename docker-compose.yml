@@ -1,0 +1,183 @@
+services:
+
+  postgres:
+    image: postgres:15
+    container_name: saleor_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: saleor
+      POSTGRES_PASSWORD: saleor123
+      POSTGRES_DB: saleor
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U saleor"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:alpine
+    container_name: saleor_redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  saleor-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.saleor
+    container_name: saleor_api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mailhog:
+        condition: service_started
+      jaeger:
+        condition: service_started
+    environment:
+      - DATABASE_URL=postgres://saleor:saleor123@postgres:5432/saleor
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - SECRET_KEY=changeme_secret_key_for_production
+      - ALLOWED_HOSTS=localhost,127.0.0.1,saleor-api
+      - DEFAULT_FROM_EMAIL=noreply@example.com
+      - ENABLE_ACCOUNT_CONFIRMATION_BY_EMAIL=False
+      - JAEGER_AGENT_HOST=jaeger
+      - OPENTRACING_JAEGER_ENABLED=True
+      - OPENTRACING_JAEGER_AGENT_HOST=jaeger
+      - OPENTRACING_JAEGER_AGENT_PORT=6831
+      - DASHBOARD_URL=http://localhost:9502/
+      - ALLOWED_CLIENT_HOSTS=localhost,127.0.0.1
+      - EMAIL_URL=smtp://mailhog:1025
+      - EMAIL_BACKEND=django.core.mail.backends.smtp.EmailBackend
+    ports:
+      - "8002:8000"
+    volumes:
+      - saleor_media:/app/media
+
+  saleor-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.saleor
+    container_name: saleor_worker
+    restart: unless-stopped
+    depends_on:
+      - saleor-api
+    environment:
+      - DATABASE_URL=postgres://saleor:saleor123@postgres:5432/saleor
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - SECRET_KEY=changeme_secret_key_for_production
+    command: celery -A saleor --app=saleor.celeryconf:app worker --loglevel=info
+
+  saleor-dashboard:
+    image: ghcr.io/saleor/saleor-dashboard:3.20
+    container_name: saleor_dashboard
+    restart: unless-stopped
+    ports:
+      - "9502:80"
+    environment:
+      - API_URL=http://localhost:8002/graphql/
+      - APP_MOUNT_URI=/dashboard/
+      - STATIC_URL=/dashboard/
+
+  storefront:
+    build:
+      context: ./storefront-nextjs
+      dockerfile: Dockerfile
+      args:
+        - NEXT_PUBLIC_SALEOR_API_URL=http://localhost:8002/graphql/
+    container_name: saleor_storefront
+    restart: unless-stopped
+    ports:
+      - "3002:3002"
+    environment:
+      - NEXT_PUBLIC_SALEOR_API_URL=http://localhost:8002/graphql/
+    depends_on:
+      - saleor-api
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.50
+    container_name: saleor_jaeger
+    restart: unless-stopped
+    ports:
+      - "16687:16686"
+      - "6832:6831/udp"
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+
+  mailhog:
+    image: mailhog/mailhog:latest
+    platform: linux/amd64
+    container_name: saleor_mailhog
+    restart: unless-stopped
+    ports:
+      - "8026:8025"
+      - "1026:1025"
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: saleor_prometheus
+    restart: unless-stopped
+    ports:
+      - "9093:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: saleor_grafana
+    restart: unless-stopped
+    ports:
+      - "3003:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_INSTALL_PLUGINS=grafana-clock-panel
+      - GF_PATHS_PROVISIONING=/etc/grafana/provisioning
+      - GF_LOG_LEVEL=debug
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana-datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml:ro
+      - ./monitoring/grafana-dashboards.yml:/etc/grafana/provisioning/dashboards/dashboards.yml:ro
+      - ./monitoring/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - prometheus
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:latest
+    container_name: saleor_cadvisor
+    restart: unless-stopped
+    ports:
+      - "8083:8080"
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    privileged: true
+
+volumes:
+  postgres_data:
+  redis_data:
+  saleor_media:
+  prometheus_data:
+  grafana_data:

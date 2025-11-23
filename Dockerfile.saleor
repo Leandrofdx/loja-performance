@@ -1,0 +1,19 @@
+FROM ghcr.io/saleor/saleor:3.20
+
+# Criar estrutura de diretórios para o comando customizado
+RUN mkdir -p /app/saleor/core/management/commands
+
+# Copiar comando customizado
+COPY saleor-custom/management/commands/__init__.py /app/saleor/core/management/commands/__init__.py
+COPY saleor-custom/management/commands/init_store.py /app/saleor/core/management/commands/init_store.py
+
+# Copiar entrypoint customizado
+COPY docker-entrypoint.sh /app/docker-entrypoint.sh
+RUN chmod +x /app/docker-entrypoint.sh
+
+# Definir entrypoint
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
+
+# Comando padrão (pode ser sobrescrito no docker-compose.yml)
+CMD ["gunicorn", "--bind", ":8000", "--workers", "4", "--worker-class", "saleor.asgi.gunicorn_worker.UvicornWorker", "saleor.asgi:application"]
+
