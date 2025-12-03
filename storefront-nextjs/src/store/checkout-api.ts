@@ -30,6 +30,15 @@ export interface CheckoutLine {
   }
 }
 
+export interface PaymentMethodData {
+  method: 'credit_card' | 'pix' | 'boleto'
+  cardData?: {
+    lastFourDigits: string
+    cardholderName: string
+    installments: string
+  }
+}
+
 export interface Checkout {
   id: string
   token: string
@@ -46,11 +55,19 @@ export interface Checkout {
   }
 }
 
+export interface PaymentMethodData {
+  method: 'credit_card' | 'pix' | 'boleto'
+  cardLastDigits?: string
+  cardName?: string
+  installments?: string
+}
+
 interface CheckoutApiState {
   checkout: Checkout | null
   loading: boolean
   error: Error | null
   hydrated: boolean
+  selectedPaymentMethod: PaymentMethodData | null
   
   // Actions
   createCheckout: () => Promise<void>
@@ -60,6 +77,8 @@ interface CheckoutApiState {
   removeItem: (lineId: string) => Promise<void>
   clearCheckout: () => void
   setHydrated: (hydrated: boolean) => void
+  setPaymentMethod: (paymentData: PaymentMethodData) => void
+  getPaymentMethod: () => PaymentMethodData | null
 }
 
 const GRAPHQL_URL = process.env.NEXT_PUBLIC_SALEOR_API_URL || 'http://localhost:8002/graphql/'
@@ -90,6 +109,7 @@ export const useCheckoutApiStore = create<CheckoutApiState>()(
       loading: false,
       error: null,
       hydrated: false,
+      selectedPaymentMethod: null,
       
       createCheckout: async () => {
         try {
@@ -546,22 +566,37 @@ export const useCheckoutApiStore = create<CheckoutApiState>()(
       },
       
       clearCheckout: () => {
-        set({ checkout: null, loading: false, error: null })
+        set({ checkout: null, loading: false, error: null, selectedPaymentMethod: null })
       },
       
       setHydrated: (hydrated: boolean) => {
         set({ hydrated })
       },
+      
+      setPaymentMethod: (paymentData: PaymentMethodData) => {
+        set({ selectedPaymentMethod: paymentData })
+      },
+      
+      getPaymentMethod: () => {
+        return get().selectedPaymentMethod
+      },
     }),
     {
       name: 'checkout-api-storage',
-      version: 1,
-      partialize: (state) => ({ checkout: state.checkout }),
+      version: 2,
+      partialize: (state) => ({ 
+        checkout: state.checkout,
+        selectedPaymentMethod: state.selectedPaymentMethod 
+      }),
       migrate: (persistedState: any, version: number) => {
-        // Se versão antiga (0), limpar checkout
+        // Se versão antiga (0 ou 1), adicionar selectedPaymentMethod
         if (version === 0) {
-          console.log('[Checkout API] Migrando de versão antiga, limpando checkout...')
-          return { ...persistedState, checkout: null }
+          console.log('[Checkout API] Migrando de versão 0, limpando checkout...')
+          return { ...persistedState, checkout: null, selectedPaymentMethod: null }
+        }
+        if (version === 1) {
+          console.log('[Checkout API] Migrando de versão 1, adicionando selectedPaymentMethod...')
+          return { ...persistedState, selectedPaymentMethod: null }
         }
         return persistedState
       },

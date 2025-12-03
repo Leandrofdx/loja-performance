@@ -185,6 +185,10 @@ export const GET_CHECKOUT = gql`
         id
         name
       }
+      metadata {
+        key
+        value
+      }
       discount {
         amount
         currency

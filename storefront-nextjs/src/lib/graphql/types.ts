@@ -86,6 +86,11 @@ export interface Address {
   phone?: string
 }
 
+export interface Metadata {
+  key: string
+  value: string
+}
+
 export interface Checkout {
   id: string
   email?: string
@@ -98,6 +103,7 @@ export interface Checkout {
   availableShippingMethods: ShippingMethod[]
   availablePaymentGateways: PaymentGateway[]
   shippingMethod?: ShippingMethod
+  metadata?: Metadata[]
   discount?: Money
   discountName?: string
   user?: {

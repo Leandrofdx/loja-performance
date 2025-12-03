@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useQuery, useMutation } from '@apollo/client'
 import { GET_CHECKOUT } from '@/lib/graphql/queries'
 import { CHECKOUT_COMPLETE, CHECKOUT_PAYMENT_CREATE } from '@/lib/graphql/mutations'
@@ -13,7 +13,7 @@ import { CheckoutStepper } from '@/components/CheckoutStepper'
 
 export default function CheckoutConfirmacao() {
   const router = useRouter()
-  const { checkout: checkoutState, clearCheckout } = useCheckoutApiStore()
+  const { checkout: checkoutState, clearCheckout, selectedPaymentMethod } = useCheckoutApiStore()
   const checkoutId = checkoutState?.id
   const [loading, setLoading] = useState(false)
   const [orderId, setOrderId] = useState<string | null>(null)
@@ -27,6 +27,13 @@ export default function CheckoutConfirmacao() {
 
   const [completeCheckout] = useMutation(CHECKOUT_COMPLETE)
   const [createPayment] = useMutation(CHECKOUT_PAYMENT_CREATE)
+
+  // Debug: verificar método salvo quando componente monta
+  useEffect(() => {
+    console.log('🟢 [Confirmação] Componente montado')
+    console.log('🟢 [Confirmação] Método de pagamento do store:', selectedPaymentMethod)
+    console.log('🟢 [Confirmação] Checkout ID:', checkoutId)
+  }, [selectedPaymentMethod, checkoutId])
 
   if (!checkoutId) {
     return (
@@ -46,18 +53,61 @@ export default function CheckoutConfirmacao() {
     setProcessingOrder(true)
 
     try {
-      // 1. Criar pagamento dummy primeiro
+      // 1. Criar pagamento com método selecionado
       const totalAmount = checkout?.totalPrice?.gross?.amount || 0
       const currency = checkout?.totalPrice?.gross?.currency || 'BRL'
+      
+      // SEMPRE usar mirumee.payments.dummy (único gateway disponível no Saleor)
+      // Mas passar método selecionado no token para identificação
+      let paymentGateway = 'mirumee.payments.dummy' // Sempre dummy (único aceito pelo Saleor)
+      let paymentToken = 'dummy-token-' + Date.now()
+      let paymentName = 'Dummy'
+      
+      console.log('🟢 [Confirmação] Verificando método antes de gerar token:', selectedPaymentMethod)
+      
+      if (selectedPaymentMethod) {
+        const { method, cardLastDigits, installments } = selectedPaymentMethod
+        
+        // Mapear método para nome
+        switch (method) {
+          case 'credit_card':
+            paymentName = 'Cartão de Crédito'
+            paymentToken = `dummy-card-${cardLastDigits || 'xxxx'}-${installments || '1'}x-${Date.now()}`
+            break
+          case 'pix':
+            paymentName = 'PIX'
+            paymentToken = `dummy-pix-payment-${Date.now()}`
+            break
+          case 'boleto':
+            paymentName = 'Boleto Bancário'
+            paymentToken = `dummy-boleto-payment-${Date.now()}`
+            break
+          default:
+            paymentName = method
+            paymentToken = `dummy-${method}-payment-${Date.now()}`
+        }
+      } else {
+        console.warn('⚠️ [Confirmação] NENHUM MÉTODO DE PAGAMENTO SELECIONADO! Usando fallback.')
+      }
+      
+      console.log('🟢 [Confirmação] Criando pagamento com método:', selectedPaymentMethod?.method || 'não selecionado')
+      console.log('🟢 [Confirmação] Gateway (sempre dummy):', paymentGateway)
+      console.log('🟢 [Confirmação] Nome do método:', paymentName)
+      console.log('🟢 [Confirmação] Token gerado (com método):', paymentToken)
+      console.log('🟢 [Confirmação] Dados completos do método:', selectedPaymentMethod)
+      
+      const paymentInput = {
+        gateway: paymentGateway, // Sempre dummy (único aceito)
+        token: paymentToken, // Token contém informação do método
+        amount: totalAmount,
+      }
+      
+      console.log('🟢 [Confirmação] Input da requisição GraphQL:', JSON.stringify(paymentInput, null, 2))
       
       const { data: paymentData } = await createPayment({
         variables: {
           id: checkoutId,
-          input: {
-            gateway: 'mirumee.payments.dummy',
-            token: 'dummy-token-' + Date.now(),
-            amount: totalAmount,
-          },
+          input: paymentInput,
         },
       })
 

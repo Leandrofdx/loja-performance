@@ -50,13 +50,18 @@ class Command(BaseCommand):
         self.stdout.write("⏳ Criando cupons de desconto...")
         self._create_vouchers()
 
-        # 8. Resumo final
+        # 8. Configurar envio para todos os produtos
+        self.stdout.write("⏳ Configurando envio para todos os produtos...")
+        self._configure_shipping_for_all_products()
+
+        # 9. Resumo final
         self.stdout.write("=" * 50)
         self.stdout.write(self.style.SUCCESS("✅ Configuração concluída com sucesso!"))
         self.stdout.write("=" * 50)
         self.stdout.write("")
         self.stdout.write("📦 Dados disponíveis:")
         self.stdout.write("   - Produtos com 1.000.000 unidades em estoque")
+        self.stdout.write("   - Todos os produtos com envio habilitado")
         self.stdout.write("   - Admin: admin@example.com / admin")
         self.stdout.write("   - User:  user@example.com / senha123")
         self.stdout.write("")
@@ -319,4 +324,63 @@ class Command(BaseCommand):
                 ))
             else:
                 self.stdout.write(self.style.WARNING("ℹ️  Cupom BEMVINDO já existe"))
+
+    def _configure_shipping_for_all_products(self):
+        """Garante que todos os produtos tenham as mesmas opções de envio."""
+        from saleor.product.models import ProductType
+        from saleor.shipping.models import ShippingZone, ShippingMethodChannelListing
+        
+        # 1. Garantir que todos os ProductTypes requerem envio
+        product_types = ProductType.objects.all()
+        updated_types = 0
+        
+        for pt in product_types:
+            if not pt.is_shipping_required:
+                pt.is_shipping_required = True
+                pt.save()
+                updated_types += 1
+        
+        if updated_types > 0:
+            self.stdout.write(self.style.SUCCESS(
+                f"✅ {updated_types} tipos de produto configurados para requerer envio"
+            ))
+        else:
+            self.stdout.write(self.style.SUCCESS(
+                "✅ Todos os tipos de produto já requerem envio"
+            ))
+        
+        # 2. Verificar zonas de envio e métodos disponíveis
+        shipping_zones = ShippingZone.objects.all()
+        
+        if not shipping_zones.exists():
+            self.stdout.write(self.style.WARNING(
+                "⚠️  Nenhuma zona de envio encontrada! Execute 'populatedb' primeiro."
+            ))
+            return
+        
+        # 3. Listar zonas e métodos de envio
+        for zone in shipping_zones:
+            methods_count = zone.shipping_methods.count()
+            if methods_count > 0:
+                self.stdout.write(self.style.SUCCESS(
+                    f"✅ Zona '{zone.name}' tem {methods_count} método(s) de envio disponível(is)"
+                ))
+                
+                # Verificar se os métodos estão ativos nos canais
+                for method in zone.shipping_methods.all():
+                    channel_listings = ShippingMethodChannelListing.objects.filter(
+                        shipping_method=method
+                    )
+                    if channel_listings.exists():
+                        self.stdout.write(
+                            f"   → {method.name} ativo em {channel_listings.count()} canal(is)"
+                        )
+            else:
+                self.stdout.write(self.style.WARNING(
+                    f"⚠️  Zona '{zone.name}' não tem métodos de envio!"
+                ))
+        
+        self.stdout.write(self.style.SUCCESS(
+            f"✅ Configuração de envio concluída! {shipping_zones.count()} zona(s) ativa(s)"
+        ))
 

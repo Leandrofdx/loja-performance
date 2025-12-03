@@ -1,7 +1,7 @@
 'use client'
 
-import { useState } from 'react'
-import { useQuery } from '@apollo/client'
+import { useState, useEffect } from 'react'
+import { useQuery, useApolloClient } from '@apollo/client'
 import { GET_CHECKOUT } from '@/lib/graphql/queries'
 import { useCheckoutApiStore } from '@/store/checkout-api'
 import { useRouter } from 'next/navigation'
@@ -13,7 +13,8 @@ type PaymentMethod = 'credit_card' | 'pix' | 'boleto'
 
 export default function CheckoutPagamento() {
   const router = useRouter()
-  const { checkout: checkoutState } = useCheckoutApiStore()
+  const client = useApolloClient()
+  const { checkout: checkoutState, setPaymentMethod, selectedPaymentMethod } = useCheckoutApiStore()
   const checkoutId = checkoutState?.id
   const [selectedMethod, setSelectedMethod] = useState<PaymentMethod | null>(null)
   const [loading, setLoading] = useState(false)
@@ -31,6 +32,98 @@ export default function CheckoutPagamento() {
     variables: { id: checkoutId || '' },
     skip: !checkoutId,
   })
+
+  // Mapeamento de métodos para gateways
+  const gatewayMap: Record<PaymentMethod, { id: string; name: string }> = {
+    pix: { id: 'mirumee.payments.pix', name: 'PIX' },
+    boleto: { id: 'mirumee.payments.boleto', name: 'Boleto Bancário' },
+    credit_card: { id: 'mirumee.payments.credit_card', name: 'Cartão de Crédito' }
+  }
+
+  // Função para adicionar gateway selecionado ao cache do Apollo
+  const addSelectedGatewayToCache = (method: PaymentMethod) => {
+    if (!checkoutId) return
+
+    try {
+      const selectedGateway = gatewayMap[method]
+      
+      // Ler cache atual
+      const existingData = client.readQuery({
+        query: GET_CHECKOUT,
+        variables: { id: checkoutId }
+      })
+
+      if (!existingData?.checkout) {
+        console.warn('⚠️ [Pagamento] Não foi possível ler cache do checkout')
+        return
+      }
+
+      // Verificar se gateway já existe no array (evitar duplicatas)
+      const gateways = existingData.checkout.availablePaymentGateways || []
+      const gatewayExists = gateways.some((g: any) => g.id === selectedGateway.id)
+
+      if (gatewayExists) {
+        console.log('✅ [Pagamento] Gateway já existe no cache:', selectedGateway.id)
+        return
+      }
+
+      // Adicionar novo gateway ao array
+      const newGateway = {
+        ...selectedGateway,
+        __typename: 'PaymentGateway' as const
+      }
+
+      // Escrever cache atualizado
+      client.writeQuery({
+        query: GET_CHECKOUT,
+        variables: { id: checkoutId },
+        data: {
+          checkout: {
+            ...existingData.checkout,
+            availablePaymentGateways: [
+              ...gateways,
+              newGateway
+            ]
+          }
+        }
+      })
+
+      console.log('✅ [Pagamento] Gateway adicionado ao cache:', newGateway)
+    } catch (error) {
+      console.error('❌ [Pagamento] Erro ao adicionar gateway ao cache:', error)
+    }
+  }
+
+  // Restaurar gateway ao montar componente se houver método selecionado
+  useEffect(() => {
+    if (!checkoutId || !data?.checkout) return
+
+    // Verificar se há método selecionado nos metadados do checkout
+    const checkout = data.checkout
+    if (checkout.metadata) {
+      const paymentMethodMeta = checkout.metadata.find((m: any) => m.key === 'selected_payment_method')
+      if (paymentMethodMeta) {
+        const method = paymentMethodMeta.value as PaymentMethod
+        if (method && ['pix', 'boleto', 'credit_card'].includes(method)) {
+          console.log('🔄 [Pagamento] Restaurando gateway dos metadados:', method)
+          addSelectedGatewayToCache(method)
+          setSelectedMethod(method)
+          return // Priorizar metadados do checkout
+        }
+      }
+    }
+
+    // Também verificar se há método no store local
+    if (selectedPaymentMethod?.method) {
+      const method = selectedPaymentMethod.method
+      if (['pix', 'boleto', 'credit_card'].includes(method)) {
+        console.log('🔄 [Pagamento] Restaurando gateway do store:', method)
+        addSelectedGatewayToCache(method)
+        setSelectedMethod(method)
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [checkoutId, data?.checkout?.metadata, selectedPaymentMethod?.method])
 
   if (!checkoutId) {
     return (
@@ -124,6 +217,34 @@ export default function CheckoutPagamento() {
     }
 
     setLoading(true)
+    
+    // Salvar método de pagamento selecionado no store
+    const paymentData = {
+      method: selectedMethod,
+      ...(selectedMethod === 'credit_card' && {
+        cardLastDigits: cardData.number.replace(/\s/g, '').slice(-4),
+        cardName: cardData.name,
+        installments: cardData.installments
+      })
+    }
+    
+    setPaymentMethod(paymentData)
+    console.log('🔵 [Pagamento] Método salvo no Zustand:', paymentData)
+    
+    // Adicionar gateway ao cache do Apollo para aparecer na requisição GraphQL
+    addSelectedGatewayToCache(selectedMethod)
+    console.log('✅ [Pagamento] Gateway adicionado ao cache do Apollo')
+    
+    // Verificar se foi salvo corretamente
+    const savedMethod = useCheckoutApiStore.getState().selectedPaymentMethod
+    console.log('🔵 [Pagamento] Método verificado após salvar:', savedMethod)
+    
+    if (!savedMethod || savedMethod.method !== selectedMethod) {
+      console.error('❌ [Pagamento] ERRO: Método não foi salvo corretamente!')
+    } else {
+      console.log('✅ [Pagamento] Método salvo com sucesso!')
+    }
+    
     // Simular processamento
     await new Promise(resolve => setTimeout(resolve, 1500))
     setLoading(false)
@@ -160,7 +281,11 @@ export default function CheckoutPagamento() {
               return (
                 <div key={method.id}>
                   <button
-                    onClick={() => setSelectedMethod(method.id)}
+                    onClick={() => {
+                      setSelectedMethod(method.id)
+                      // Adicionar gateway ao cache imediatamente quando selecionado
+                      addSelectedGatewayToCache(method.id)
+                    }}
                     className={`w-full p-6 border-2 rounded-2xl transition-all text-left ${
                       isSelected 
                         ? 'border-blue-600 bg-blue-50/50 ring-4 ring-blue-100' 
